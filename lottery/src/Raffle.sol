@@ -36,6 +36,14 @@ pragma solidity ^0.8.13;
 
 contract Raffle is VRFConsumerBaseV2Plus{
     error SendMoreToEnterRaffle();
+    error Raffle_TransferFailed();
+    error Raffle_RaffleNotOpen();
+
+    enum RaffleState{
+        OPEN,
+        CALCULATING
+    }
+    RaffleState private s_raffleState;
 
     //state variable - chainlink subscription variables
     bytes32 private immutable i_gasLane;
@@ -50,9 +58,11 @@ contract Raffle is VRFConsumerBaseV2Plus{
     uint256 private immutable i_interval;
     uint256 private s_lastime;
     address immutable i_vrfCoordinator;
+    address payable private s_recentWinner;
 
     /*Events*/ 
     event RaffleEntered(address indexed player);
+    event PickedWinner(address winner);
 
     //inheriting the theVRFCorinator an aing the arguments()
 
@@ -63,14 +73,14 @@ contract Raffle is VRFConsumerBaseV2Plus{
         i_gasLane = gasLane;
         i_subscriptionId = subscriptionId;
         i_callbackGasLimit = callbackGasLimit;
+        s_raffleState = RaffleState.OPEN;
     }
    //Function to enter the Raffle
    //Function to pick Winner
    
    function enterRaffle () public payable{
-        if(msg.value < i_entraceFee){
-            revert SendMoreToEnterRaffle();
-        }
+        if(msg.value < i_entraceFee)revert SendMoreToEnterRaffle();
+        if (s_raffleState != RaffleState.OPEN) revert Raffle_RaffleNotOpen();
         s_players.push(payable (msg.sender));
         //reasons for Events
         //1. Making migration easier
@@ -79,14 +89,37 @@ contract Raffle is VRFConsumerBaseV2Plus{
        
 
    }
+    /// @title A title that should describe the contract/interface
+    /// @author The name of the author
+    /// @notice Explain to an end user what this does
+    /// @dev This is the function that the chainlink keeper nodes calls
+    //They look for 'upkeepNeeded' to return True.abi
+    
+    //the following should be true for the return True
+    //1. The time interval has passed between raffle runs
+    //2. The lottery is open
+    //3. The contract has Eth
+    //4.There are players registered.
+    //5. Implicity, your subscription is funded withLINK
+
+    function checkUpKeep(bytes memory /*checkdata*/) public view returns (bool upkeepNeeded, bytes memory /*performData*/){
+        bool isOpen = RaffleState.OPEN ==s_raffleState;
+        bool timePassed = ((block.timestamp - s_lastime) > i_interval);
+        bool hasPlayers = s_players.length > 0;
+        bool hasBalance = address(this).balance > 0;
+        upkeepNeeded= (timePassed && hasPlayers && hasBalance && isOpen);
+        return (upkeepNeeded, "0xo");
+
+    }
+
     //1. Get a random number
     //2. Use random number to pick a player
     //3. Be automatically called
     function pickWinner () public {
         //check to see if enough time has passed
-        if((block.timestamp -s_lastime)< i_interval){
-            revert();
-        }
+        if((block.timestamp -s_lastime)< i_interval) revert();
+        s_raffleState = RaffleState.OPEN;
+
          uint256 requestId = s_vrfCoordinator.requestRandomWords(
             VRFV2PlusClient.RandomWordsRequest({
                 keyHash: i_gasLane,
@@ -102,11 +135,41 @@ contract Raffle is VRFConsumerBaseV2Plus{
         );
         //Get a random number == hard because this is a deterministic chain
    }
-   function fulfillRandomWords(uint256 requestId, uint256[] memory randomWords) internal override {}
+   function
+   function fulfillRandomWords(uint256 requestId, uint256[] calldata randomWords) internal override {
+        uint256 indexOfWinner =randomWords[0] % s_players.length;
+        address payable winner = s_players[indexOfWinner];
+        s_recentWinner = winner;
+        s_players = new address payable[](0);
+        s_lastime = block.timestamp;
+        s_raffleState = RaffleState.OPEN;
+        (bool success,) = winner.call{value:address(this).balance}("");
+        if(!success){
+            revert Raffle_TransferFailed();
+        }
+        emit PickedWinner(winner);
+   }
   /**
    * Getter Functions
    */
   function getEntranceFee() public view returns(uint256){
     return i_entraceFee;
   }
+  //CEI SYTLE EXAMPLE
+  function coolFunction() public {
+    //check for x and y 
+    // then the effect/if true then()
+    //then call and sends
+
+    checkX();
+    checkY();
+
+    updateM();
+
+    //Interactions
+    callA();
+    sendB();
+
+  }
+
 }
